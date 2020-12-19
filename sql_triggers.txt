@@ -1,0 +1,123 @@
+
+------------------------------------------------------------------------------
+AFTER INSERT ON `CustomerDetails`
+------------------------------------------------------------------------------
+
+CREATE DEFINER = CURRENT_USER TRIGGER `BankingDBProject`.`CustomerDetails_AFTER_INSERT` AFTER INSERT ON `CustomerDetails` FOR EACH ROW
+BEGIN
+INSERT INTO UserActivityLog (CustomerID, msgUserActiveLog, timestampUserActiveLog) values (NEW.CustomerID, 'NewCustomerAdded', CURRENT_TIMESTAMP);
+END
+
+------------------------------------------------------------------------------
+AFTER INSERT ON `AccountDetails` 
+------------------------------------------------------------------------------
+
+CREATE DEFINER = CURRENT_USER TRIGGER `BankingDBProject`.`AccountDetails_AFTER_INSERT` AFTER INSERT ON `AccountDetails` FOR EACH ROW
+BEGIN
+INSERT INTO UserActivityLog (CustomerID, msgUserActiveLog, timestampUserActiveLog) values (NEW.AccountNumber, 'NewAccountCreated', CURRENT_TIMESTAMP);
+END
+
+
+------------------------------------------------------------------------------
+AFTER INSERT ON `Transactions`
+------------------------------------------------------------------------------
+
+CREATE DEFINER = CURRENT_USER TRIGGER `BankingDBProject`.`Transactions_AFTER_INSERT` AFTER INSERT ON `Transactions` FOR EACH ROW
+BEGIN
+IF NEW.TransactionType = 'DBT' THEN
+	
+	INSERT INTO BankingDBProject.TransactionLog ( AccountID, TransRefNumber, TransactionLogTimestamp, TransactionLogMessage, TransactionType) values (NEW.AccountNumber, NEW.TransactionReferenceNumber, CURRENT_TIMESTAMP, 'Posted', NEW.TransactionType);
+
+	UPDATE BankingDBProject.AccountDetails a SET a.AccountBalance = (a.AccountBalance - NEW.TransactionAmount) where a.AccountNumber = NEW.AccountNumber;
+    
+	INSERT INTO BankingDBProject.TransactionLog ( AccountID, TransRefNumber, TransactionLogTimestamp, TransactionLogMessage, TransactionType) values (NEW.AccountNumber, NEW.TransactionReferenceNumber, CURRENT_TIMESTAMP, 'Debit Posted', NEW.TransactionType);
+
+    UPDATE BankingDBProject.AccountDetails a SET a.AccountBalance = (a.AccountBalance + NEW.TransactionAmount) where a.AccountNumber = NEW.BeneficiaryAccount;
+    
+	INSERT INTO BankingDBProject.TransactionLog ( AccountID, TransRefNumber, TransactionLogTimestamp, TransactionLogMessage, TransactionType) values (NEW.AccountNumber, NEW.TransactionReferenceNumber, CURRENT_TIMESTAMP, 'Success', NEW.TransactionType);
+    
+    INSERT INTO BankingDBProject.TransactionLog ( AccountID, TransRefNumber, TransactionLogTimestamp, TransactionLogMessage, TransactionType) values (NEW.BeneficiaryAccount, NEW.TransactionReferenceNumber, CURRENT_TIMESTAMP, 'Credit Received', NEW.TransactionType);
+
+END IF;
+END
+
+------------------------------------------------------------------------------
+AFTER INSERT ON `Stock_WatchList`
+------------------------------------------------------------------------------
+
+CREATE DEFINER = CURRENT_USER TRIGGER `BankingDBProject`.`Stock_WatchList_AFTER_INSERT` AFTER INSERT ON `Stock_WatchList` FOR EACH ROW
+BEGIN
+
+INSERT INTO BankingDBProject.StockLogs (AccountNumber, StockSymbol, StockLogMessage, StockTransactionType) values (NEW.AccountNumber, NEW.StockSymbol, 'Watchlist Added', 'Watchlist_Added');
+
+END
+
+------------------------------------------------------------------------------
+AFTER DELETE ON `Stock_WatchList`
+------------------------------------------------------------------------------
+
+CREATE DEFINER = CURRENT_USER TRIGGER `BankingDBProject`.`Stock_WatchList_AFTER_DELETE` AFTER DELETE ON `Stock_WatchList` FOR EACH ROW
+BEGIN
+
+INSERT INTO BankingDBProject.StockLogs (AccountNumber, StockSymbol, StockLogMessage, StockTransactionType) values (OLD.AccountNumber, OLD.StockSymbol, 'Watchlist Removed', 'Watchlist_Removed');
+
+END
+
+------------------------------------------------------------------------------
+AFTER INSERT ON `StockActivity`
+------------------------------------------------------------------------------
+ 
+CREATE DEFINER = CURRENT_USER TRIGGER `BankingDBProject`.`StockActivity_AFTER_INSERT` AFTER INSERT ON `StockActivity` FOR EACH ROW
+BEGIN
+IF NEW.TradeType = 'Buy' THEN
+	INSERT INTO BankingDBProject.StockLogs (AccountNumber, StockSymbol, StockLogMessage, StockTransactionType) values (NEW.AccountNumber, NEW.StockSymbol, 'Bid Successful', 'Buy_Stock');
+	UPDATE AccountDetails a SET a.AccountBalance = (a.AccountBalance - NEW.StockMoney) where a.AccountNumber = NEW.AccountNumber; 
+	INSERT INTO TransactionLog ( AccountID, TransRefNumber, TransactionLogMessage, TransactionType) values (NEW.AccountNumber, NEW.StockActivityID, NEW.TradeType, 'CRD');
+END IF;
+IF NEW.TradeType = 'Sell' THEN
+	INSERT INTO BankingDBProject.StockLogs (AccountNumber, StockSymbol, StockLogMessage, StockTransactionType) values (NEW.AccountNumber, NEW.StockSymbol, 'Bid Successful', 'Sell_Stock');
+	UPDATE AccountDetails a SET a.AccountBalance = (a.AccountBalance + NEW.StockMoney) where a.AccountNumber = NEW.AccountNumber; 
+	INSERT INTO TransactionLog ( AccountID, TransRefNumber, TransactionLogMessage, TransactionType) values (NEW.AccountNumber, NEW.StockActivityID, NEW.TradeType, 'DBT');
+END IF;
+END
+
+------------------------------------------------------------------------------
+AFTER DELETE ON `CustomerDetails`
+------------------------------------------------------------------------------
+
+CREATE DEFINER = CURRENT_USER TRIGGER `BankingDBProject`.`CustomerDetails_AFTER_DELETE` AFTER DELETE ON `CustomerDetails` FOR EACH ROW
+BEGIN
+#cursor.execute('DELETE FROM BankingDBProject.CustomerDetails WHERE CustomerID = %s;', (customerid, ))
+SET @customerid = OLD.CustomerID;
+SET @accountids = (SELECT AccountNumber FROM BankingDBProject.CustomerAccounts WHERE CustomerID = @customerid);
+
+DELETE FROM BankingDBProject.CustomerAccounts WHERE AccountNumber = @accountids;
+INSERT INTO BankingDBProject.UserActivityLog (CustomerID, msgUserActiveLog, timestampUserActiveLog) values (@accountids, 'AccountInactive', CURRENT_TIMESTAMP);
+INSERT INTO BankingDBProject.UserActivityLog (CustomerID, msgUserActiveLog, timestampUserActiveLog) values (@customerid, 'CustomerRemoved', CURRENT_TIMESTAMP);
+DELETE FROM BankingDBProject.AccountDetails WHERE AccountNumber = @accountids;
+DELETE FROM BankingDBProject.Stock_WatchList WHERE AccountNumber = @accountids;
+DELETE FROM BankingDBProject.BeneficiaryDetails WHERE AccountNumber = @accountids;
+DELETE FROM BankingDBProject.StockActivity WHERE AccountNumber = @accountids;
+DELETE FROM BankingDBProject.Transactions WHERE AccountNumber = @accountids;
+
+
+END
+
+------------------------------------------------------------------------------
+AFTER UPDATE ON `AccountDetails`
+------------------------------------------------------------------------------
+
+CREATE DEFINER = CURRENT_USER TRIGGER `BankingDBProject`.`AccountDetails_AFTER_UPDATE` AFTER UPDATE ON `AccountDetails` FOR EACH ROW
+BEGIN
+SET @accountstatus = (SELECT AccountStatus FROM BankingDBProject.AccountDetails WHERE AccountNumber = NEW.AccountNumber);
+IF @accountstatus = 'Inactive' THEN
+	INSERT INTO BankingDBProject.UserActivityLog (CustomerID, msgUserActiveLog, timestampUserActiveLog) values (NEW.AccountNumber, 'AccountInactive', CURRENT_TIMESTAMP);
+	DELETE FROM BankingDBProject.Stock_WatchList WHERE AccountNumber = NEW.AccountNumber;
+	#DELETE FROM BankingDBProject.CustomerAccounts WHERE AccountNumber = NEW.AccountNumber;
+	UPDATE BankingDBProject.CustomerAccounts SET AccountStatus = 'Inactive' WHERE AccountNumber = NEW.AccountNumber;
+	#DELETE FROM BankingDBProject.BeneficiaryDetails WHERE AccountNumber = NEW.AccountNumber;
+	#DELETE FROM BankingDBProject.StockActivity WHERE AccountNumber = NEW.AccountNumber;
+	#DELETE FROM BankingDBProject.Transactions WHERE AccountNumber = NEW.AccountNumber;
+
+END IF; 
+END
