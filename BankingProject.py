@@ -56,7 +56,7 @@ try:
     connection = mysql.connector.connect(host='localhost',
                                          database='BankingDBProject',
                                          user='root',
-                                         password='Katniss$11',
+                                         password='KD11',
                                          auth_plugin = 'mysql_native_password',)
     
     if connection.is_connected():
